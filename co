@@ -1,0 +1,67 @@
+import requests
+import time
+import datetime
+import pytz
+from termcolor import colored
+
+def get_coin_data():
+    response = requests.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false')
+    coin_data = response.json()
+    return coin_data
+
+def get_most_profitable_coin():
+    coin_data = get_coin_data()
+    coin_dict = {}
+    for coin in coin_data:
+        coin_dict[coin['id']] = coin['price_change_percentage_24h']
+    most_profitable_coin = max(coin_dict, key=coin_dict.get)
+    return most_profitable_coin
+
+correct_predictions = 0
+incorrect_predictions = 0
+transaction_amount = 100
+
+def show_coin_prediction():
+    global correct_predictions, incorrect_predictions, transaction_amount
+    tz = pytz.timezone('Israel')
+    while True:
+        prediction_time = datetime.datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')
+        most_profitable_coin = get_most_profitable_coin()
+        coin_data = get_coin_data()
+        for coin in coin_data:
+            if coin['id'] == most_profitable_coin:
+                live_price = coin['current_price']
+                break
+        time.sleep(20)
+        most_profitable_coin = get_most_profitable_coin()
+        coin_data = get_coin_data()
+        for coin in coin_data:
+            if coin['id'] == most_profitable_coin:
+                live_price_20s = coin['current_price']
+                price_change_percentage = coin['price_change_percentage_24h']
+                print(colored("Prediction made at: " + prediction_time, 'green'))
+                print(colored("Most profitable coin: " + most_profitable_coin, 'blue'))
+                print(colored("Price when prediction made: " + str(live_price) + " at " + datetime.datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S'), 'yellow'))
+                print(colored("Price after 20 seconds: " + str(live_price_20s) + " at " + datetime.datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S'), 'yellow'))
+                if price_change_percentage is not None:
+                    if price_change_percentage > 0:
+                        profit_loss = transaction_amount * price_change_percentage / 100
+                        transaction_amount += profit_loss
+                        print(colored("Price went up by: " + str(price_change_percentage) + "%" + " at " + datetime.datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S'), 'green'))
+                        print(colored("Profit: $" + str(profit_loss), 'green'))
+                        correct_predictions += 1
+                    elif price_change_percentage < 0:
+                        profit_loss = transaction_amount * price_change_percentage / 100
+                        transaction_amount += profit_loss
+                        print(colored("Price went down by: " + str(abs(price_change_percentage)) + "%" + " at " + datetime.datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S'), 'red'))
+                        print(colored("Loss: $" + str(abs(profit_loss)), 'red'))
+                        incorrect_predictions += 1
+                    else:
+                        print(colored("Price did not change" + " at " + datetime.datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S'), 'green'))
+                else:
+                    print(colored("Price change percentage not available" + " at " + datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S'), 'green'))
+                    print(colored("Correct predictions: " + str(correct_predictions) + " Incorrect predictions: " + str(incorrect_predictions), 'blue'))
+                break
+        time.sleep(3)
+
+show_coin_prediction()
