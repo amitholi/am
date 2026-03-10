@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+import argparse, json, math, random, statistics
+from datetime import datetime
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+
+def get_json(url, params=None, timeout=20):
+    if params:
+        url = f"{url}?{urlencode(params)}"
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def fetch_day_gainers(count=100):
+    data = get_json(
+        "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved",
+        {
+            "formatted": "false",
+            "scrIds": "day_gainers",
+            "count": str(count),
+            "start": "0",
+        },
+    )
+    return data["finance"]["result"][0]["quotes"]
+
+
+def fetch_chart(symbol, interval="5m", rng="5d"):
+    result = get_json(
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+        {"interval": interval, "range": rng, "includePrePost": "true"},
+    )["chart"]["result"][0]
+    quote = result["indicators"]["quote"][0]
+    return {k: quote.get(k, []) for k in ["open", "high", "low", "close", "volume"]}
+
+
+def fetch_daily(symbol, start, end):
+    result = get_json(
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+        {"interval": "1d", "period1": str(start), "period2": str(end)},
+    )["chart"]["result"][0]
+    quote = result["indicators"]["quote"][0]
+    return quote.get("volume", [])
+
+
+def rsi(values, period=9):
+    vals = [v for v in values if isinstance(v, (int, float))]
+    if len(vals) <= period:
+        return None
+    gains, losses = [], []
+    for i in range(1, len(vals)):
+        d = vals[i] - vals[i - 1]
+        gains.append(max(0, d))
+        losses.append(max(0, -d))
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def vwap(closes, volumes):
+    pairs = [(c, v) for c, v in zip(closes, volumes) if isinstance(c, (int, float)) and isinstance(v, (int, float))]
+    if not pairs:
+        return None
+    tv = sum(v for _, v in pairs)
+    if tv == 0:
+        return None
+    return sum(c * v for c, v in pairs) / tv
+
+
+def monte_carlo_win_prob(closes, horizon=24, sims=1200):
+    vals = [v for v in closes if isinstance(v, (int, float))]
+    if len(vals) < 80:
+        return 0.0
+    rets = [math.log(vals[i] / vals[i - 1]) for i in range(1, len(vals)) if vals[i - 1] > 0 and vals[i] > 0]
+    if len(rets) < 40:
+        return 0.0
+    mu = statistics.mean(rets)
+    sigma = statistics.pstdev(rets) or 1e-6
+    start = vals[-1]
+    wins = 0
+    for _ in range(sims):
+        p = start
+        for _ in range(horizon):
+            p *= math.exp(random.gauss(mu, sigma))
+        if p > start:
+            wins += 1
+    return wins / sims
+
+
+def score_candidate(q):
+    symbol = q.get("symbol")
+    reg_vol = q.get("regularMarketVolume") or 0
+    avg10 = q.get("averageDailyVolume10Day") or 0
+    bid, ask = q.get("bid"), q.get("ask")
+    price = q.get("regularMarketPrice") or bid or ask or 0
+    mcap = q.get("marketCap") or 0
+
+    if not symbol or mcap <= 0 or mcap > 300_000_000:
+        return None
+    if avg10 <= 0 or reg_vol < 3 * avg10:
+        return None
+
+    if not (isinstance(bid, (int, float)) and isinstance(ask, (int, float)) and price):
+        return None
+    spread_pct = ((ask - bid) / price) * 100
+    if spread_pct >= 0.3:
+        return None
+
+    june_start = int(datetime(2023, 6, 1).timestamp())
+    july_start = int(datetime(2023, 7, 1).timestamp())
+    june_vols = [v for v in fetch_daily(symbol, june_start, july_start) if isinstance(v, (int, float))]
+    june_peak = max(june_vols) if june_vols else 0
+    if reg_vol <= june_peak:
+        return None
+
+    chart = fetch_chart(symbol)
+    closes, vols = chart["close"], chart["volume"]
+    last_close = next((v for v in reversed(closes) if isinstance(v, (int, float))), None)
+    last_vol = next((v for v in reversed(vols) if isinstance(v, (int, float))), 0)
+    vol20 = [v for v in vols if isinstance(v, (int, float))][-20:]
+    avg20 = (sum(vol20) / len(vol20)) if vol20 else 0
+
+    r = rsi(closes, 9)
+    vw = vwap(closes, vols)
+    pattern_ok = bool(last_close and vw and last_close > vw and avg20 and last_vol > 3 * avg20)
+    win_prob = monte_carlo_win_prob(closes)
+
+    confidence = min(0.99, min(reg_vol / (3 * avg10), 3) * 0.2 + (0.2 if pattern_ok else 0) + (min(max((r or 50) / 100, 0), 1) * 0.1) + win_prob * 0.5)
+
+    return {
+        "symbol": symbol,
+        "price": round(price, 4),
+        "volume_ratio": reg_vol / avg10,
+        "vwap": vw,
+        "win_prob": win_prob,
+        "confidence": confidence,
+    }
+
+
+def kelly_fraction(p, b=2.67):
+    q = 1 - p
+    return max(0.0, min(0.05, (b * p - q) / b))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--market", default="us_microcap")
+    ap.add_argument("--volume_filter", default="june_peak")
+    ap.add_argument("--timeframe", default="120min")
+    ap.add_argument("--min_confidence", type=float, default=0.85)
+    ap.add_argument("--risk_profile", default="aggressive")
+    args = ap.parse_args()
+
+    try:
+        quotes = fetch_day_gainers(200)
+    except Exception:
+        print(json.dumps({
+            "ticker": "N/A",
+            "confidence_score": 0.0,
+            "entry_range": [0.0, 0.0],
+            "position_size": "0% of capital",
+            "exit_target": 0.0,
+            "stop_loss": 0.0,
+            "volume_ratio": 0.0,
+            "catalyst": "Live market/sentiment feeds unavailable in this runtime (network proxy 403)."
+        }, indent=2))
+        return
+    candidates = []
+    for q in quotes:
+        try:
+            scored = score_candidate(q)
+            if scored:
+                candidates.append(scored)
+        except Exception:
+            continue
+
+    if not candidates:
+        print(json.dumps({"error": "No candidates passed strict filters"}, indent=2))
+        return
+
+    candidates.sort(key=lambda x: x["confidence"], reverse=True)
+    top = candidates[0]
+
+    price = top["price"]
+    out = {
+        "ticker": top["symbol"],
+        "confidence_score": round(top["confidence"], 2),
+        "entry_range": [round(price * 0.9975, 2), round(price * 1.0025, 2)],
+        "position_size": f"{round(kelly_fraction(top['win_prob']) * 100, 2)}% of capital",
+        "exit_target": round(price * 1.08, 2),
+        "stop_loss": round(min(price * 0.97, top["vwap"] if top["vwap"] else price * 0.97), 2),
+        "volume_ratio": round(top["volume_ratio"], 2),
+        "catalyst": "VWAP breakout with >3x relative volume; social/dark-pool/insider data unavailable in free feed.",
+    }
+
+    print(json.dumps(out, indent=2))
+
+
+if __name__ == "__main__":
+    main()
