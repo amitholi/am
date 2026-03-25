@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-family: "Heebo", "Assistant", system-ui, sans-serif;
+}
+
+* {
+  direction: rtl;
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: #f8fafc;
+  color: #1e293b;
+}
+
+/* Hebrew typography */
+h1, h2, h3, h4, h5, h6 {
+  font-family: "Heebo", sans-serif;
+  font-weight: 700;
+}
+
+/* Status badges */
+.badge-open {
+  @apply bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded-full;
+}
+.badge-closed {
+  @apply bg-gray-100 text-gray-800 text-xs font-medium px-2.5 py-0.5 rounded-full;
+}
+.badge-deleted {
+  @apply bg-red-100 text-red-800 text-xs font-medium px-2.5 py-0.5 rounded-full;
+}
+.badge-case-type {
+  @apply bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full;
+}
+
+/* Card */
+.card {
+  @apply bg-white rounded-xl shadow-sm border border-gray-100 p-6;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 3px;
+}
+
+/* Highlight search terms */
+mark {
+  background-color: #fef08a;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* Table */
+.table-hebrew {
+  @apply w-full text-sm text-right;
+}
+.table-hebrew th {
+  @apply px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-50 border-b border-gray-200;
+}
+.table-hebrew td {
+  @apply px-4 py-3 border-b border-gray-100;
+}
+.table-hebrew tr:hover td {
+  @apply bg-blue-50;
+}
