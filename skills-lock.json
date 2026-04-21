@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "israeli-real-estate": {
+      "source": "skills-il/government-services",
+      "sourceType": "github",
+      "computedHash": "0d3f7a4a3a45fcf5be6c7d40da697e72577fa03e1756e8fd2988b776f61a87a5"
+    }
+  }
+}
