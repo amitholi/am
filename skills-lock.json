@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "israel-gov-api": {
+      "source": "skills-il/government-services",
+      "sourceType": "github",
+      "computedHash": "ae982d23ab8c9e6eccbcaace725a57c3f8a96f4e64a1202a2e3361bf1da1b151"
+    }
+  }
+}
