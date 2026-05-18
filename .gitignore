@@ -1,2 +1,26 @@
 node_modules/
+.next/
+out/
 dist/
+build/
+
+# env
+.env
+.env.local
+.env*.local
+
+# data
+data/*.db
+data/*.db-journal
+data/*.db-shm
+data/*.db-wal
+
+# typescript incremental
+*.tsbuildinfo
+
+# misc
+.DS_Store
+*.log
+npm-debug.log*
+.vercel
+next-env.d.ts
