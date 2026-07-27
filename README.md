@@ -58,6 +58,24 @@ python3 run.py obfuscate "text"      # redact PII, normalize whitespace
 phone numbers, cards, SSNs) — not an adversarial transform. `eval` reports
 the fraction of sub-queries the pipeline answered, as a coverage metric.
 
+### Benchmark
+
+`benchmark.py` measures pipeline **latency, sub-query coverage, and token
+usage** over a fixed set of ordinary queries. It uses the offline echo client
+by default and the live Anthropic client when `ANTHROPIC_API_KEY` (or an
+`ant auth login` profile) is present.
+
+```sh
+python3 benchmark.py                     # dry run (no API key)
+python3 benchmark.py --quick             # single-query smoke test
+python3 benchmark.py --json report.json  # save JSON results
+python3 benchmark.py --html report.html  # save HTML report
+ANTHROPIC_API_KEY=sk-... python3 benchmark.py  # live test
+```
+
+It's a performance/coverage benchmark of the pipeline, not a scorer of any
+model's safety behavior.
+
 ## Web app
 
 ```sh

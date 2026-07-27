@@ -106,6 +106,45 @@ class EchoApiClient:
         return {"id": envelope["id"], "result": self.handler(envelope["payload"]["query"])}
 
 
+@dataclass
+class AnthropicApiClient:
+    """Send each sub-query to the Anthropic Messages API and return the answer.
+
+    Requires the ``anthropic`` package and credentials (``ANTHROPIC_API_KEY``
+    or an ``ant auth login`` profile). Reports token usage in the response so
+    the benchmark can aggregate it.
+    """
+
+    model: str = "claude-opus-5"
+    max_tokens: int = 1024
+    system: str | None = None
+    _client: Any = None
+
+    def __post_init__(self) -> None:
+        if self._client is None:
+            import anthropic  # imported lazily so the offline path needs no dep
+
+            self._client = anthropic.Anthropic()
+
+    def send(self, envelope: dict[str, Any]) -> dict[str, Any]:
+        query = envelope["payload"]["query"]
+        message = self._client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            system=self.system or "Answer the question concisely.",
+            messages=[{"role": "user", "content": query}],
+        )
+        if message.stop_reason == "refusal":
+            return {"id": envelope["id"], "refused": True, "result": "", "usage": _usage(message)}
+        text = next((b.text for b in message.content if b.type == "text"), "")
+        return {"id": envelope["id"], "result": text, "usage": _usage(message)}
+
+
+def _usage(message: Any) -> dict[str, int]:
+    u = message.usage
+    return {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens}
+
+
 # --------------------------------------------------------------------------- #
 # Merger / Report
 # --------------------------------------------------------------------------- #
