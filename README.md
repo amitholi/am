@@ -46,6 +46,18 @@ uv run python pipeline.py "What drives momentum? How is it measured?"
 uv run pytest                    # test suite
 ```
 
+### CLI
+
+```sh
+python3 run.py decompose "query" 5   # split into <= 5 sub-queries
+python3 run.py eval "query"          # run pipeline, print coverage score
+python3 run.py obfuscate "text"      # redact PII, normalize whitespace
+```
+
+`obfuscate` is a defensive redaction/normalization utility (masks emails,
+phone numbers, cards, SSNs) — not an adversarial transform. `eval` reports
+the fraction of sub-queries the pipeline answered, as a coverage metric.
+
 ## Web app
 
 ```sh
