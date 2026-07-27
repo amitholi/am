@@ -28,6 +28,24 @@ The `co` script (crypto momentum tracker) runs inside the uv environment:
 uv run python co
 ```
 
+## Query pipeline
+
+`pipeline.py` implements a fan-out/fan-in pipeline:
+
+```
+User Query → SPLITTER → [Encoder → Wrapper → ApiClient] × N → MERGER → Report
+```
+
+The query is split into N sub-queries, each encoded, wrapped in a delivery
+envelope, and sent through a pluggable `ApiClient` in parallel; responses are
+merged into a `Report`. `HttpApiClient` posts JSON to any endpoint;
+`EchoApiClient` runs offline for tests and demos.
+
+```sh
+uv run python pipeline.py "What drives momentum? How is it measured?"
+uv run pytest                    # test suite
+```
+
 ## Web app
 
 ```sh
