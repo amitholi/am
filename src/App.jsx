@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // ─── CONSTANTS ─────────────────────────────────────────────────────────────────
 const API_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-mythos-5";
 
 const SCAN_PROMPT = `You are a micro-cap stock screening engine. Your job is to identify real US micro-cap stocks showing unusual momentum TODAY.
 
@@ -627,11 +627,17 @@ export default function App() {
           "Content-Type": "application/json",
           "x-api-key": effectiveKey,
           "anthropic-version": "2023-06-01",
+          "anthropic-beta": "server-side-fallback-2026-07-01",
           "anthropic-dangerous-direct-browser-access": "true",
         },
         body: JSON.stringify({
           model: MODEL,
-          max_tokens: 4000,
+          // Thinking is always on for claude-mythos-5 and max_tokens caps
+          // thinking + response text together, so give it headroom.
+          max_tokens: 16000,
+          // Server-side fallback: if safety classifiers decline the request,
+          // the API re-runs it on Anthropic's recommended fallback model.
+          fallbacks: "default",
           tools: [{ type: "web_search_20250305", name: "web_search" }],
           messages: [{ role: "user", content: SCAN_PROMPT }],
         }),
@@ -643,6 +649,16 @@ export default function App() {
       }
 
       const data = await resp.json();
+
+      // claude-mythos-5 can return HTTP 200 with stop_reason "refusal"
+      // (safety classifiers declined; content is empty or partial). Check
+      // before reading content. With fallbacks enabled this only fires if
+      // the fallback model refused too.
+      if (data.stop_reason === "refusal") {
+        const category = data.stop_details?.category || "unspecified";
+        throw new Error(`Request declined by safety classifiers (category: ${category})`);
+      }
+
       log("Web search completed, parsing results...", T.cyan, "◎");
 
       const textBlocks = (data.content || [])
