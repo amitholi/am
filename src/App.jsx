@@ -2,28 +2,27 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // ─── CONSTANTS ─────────────────────────────────────────────────────────────────
 const API_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-mythos-5";
 
-const SCAN_PROMPT = `You are a micro-cap stock screening engine. Your job is to identify real US micro-cap stocks showing unusual momentum TODAY.
+const SCAN_PROMPT = `You are a skeptical sell-side micro-cap analyst, not a promotion desk. Your job is to surface US micro-cap stocks (market cap under $500M) with genuine, verifiable momentum today — and to kill weak candidates before they reach the output.
 
-STEP 1: Search for "micro cap stocks unusual volume today site:finance.yahoo.com OR site:marketwatch.com OR site:nasdaq.com"
-STEP 2: Search for "penny stocks biggest movers today"
-STEP 3: Search for "small cap stocks breaking news catalyst today"
-STEP 4: Search for "SEC Form 4 insider buying small cap this week"
+Research broadly: unusual-volume screens, biggest movers, breaking-news catalysts, and SEC Form 4 insider buying. Prefer primary or reputable secondary sources (exchange data, SEC filings, established financial press) over promotional content.
 
-From your research, identify 5-8 REAL stocks (market cap under $500M) that are showing genuine momentum signals today. Use actual tickers, real company names, real prices if you can find them, and real catalysts from the news.
+Run a two-round tournament:
 
-CRITICAL INSTRUCTION: Your ENTIRE response must be ONLY a JSON array. No text before it. No text after it. No markdown backticks. Just the raw JSON array starting with [ and ending with ].
+ROUND 1 — Disqualification. For each candidate, ask: what is the strongest reason NOT to touch it? Disqualify any stock where you find: likely dilution (active ATM, warrants overhang), toxic financing, evidence of paid promotion, a history of collapsing 80%+ on the same pattern, or a "catalyst" that is only the company's own press release with no independent confirmation.
 
-Each object in the array:
-{"ticker":"REAL","name":"Real Company Name","sector":"Sector","price":0.00,"change_pct":0.0,"volume_desc":"e.g. 5x average volume","market_cap_m":0,"catalyst":"Actual news catalyst you found","source":"Publication name","confidence":0.85}
+ROUND 2 — For survivors only, record the data below. Data discipline:
+- Only real tickers that actually trade on US exchanges. If you cannot verify a ticker exists, drop it.
+- price / change_pct / market_cap_m: only values you actually found, with the source and its date. If a number is unknown, use null — never invent a plausible-looking value.
+- catalyst: state the fact, and note whether it is independently confirmed or company-PR only.
+- bear_case: the single strongest argument against the trade — the smartest one, not a strawman.
+- confidence is an evidence score, not enthusiasm: 0.90+ only for a multi-source-confirmed catalyst plus verified unusual volume; 0.75-0.89 for a single credible source; below 0.75 for momentum with no independent confirmation. Use the full range honestly.
 
-Rules:
-- Only use REAL tickers that actually trade on US exchanges
-- Use real prices and % changes if you found them
-- confidence: 0.80-0.97 based on strength of signal
-- If a stock has strong volume + catalyst + momentum, confidence should be higher
-- market_cap_m: actual market cap in millions if known, or best estimate`;
+Returning fewer stocks — or an empty array if nothing survives Round 1 — is a correct and expected outcome. "No trade today" beats a padded list.
+
+Respond with only the raw JSON array (no surrounding text, no markdown fences), where each element is:
+{"ticker":"","name":"","sector":"","price":null,"change_pct":null,"volume_desc":"","market_cap_m":null,"catalyst":"","catalyst_confirmed":false,"bear_case":"","source":"Publication name, date","confidence":0.0}`;
 
 // ─── THEME ─────────────────────────────────────────────────────────────────────
 const T = {
@@ -108,7 +107,9 @@ function enrichSignal(raw, idx) {
   const target = +(price * (1.06 + Math.random() * 0.04)).toFixed(4);
   const kelly = +(1.5 + Math.random() * 3.5).toFixed(1);
   const winProb = +(0.78 + Math.random() * 0.18).toFixed(2);
-  const conf = raw.confidence ? Math.min(+raw.confidence, 0.97) : +(0.80 + Math.random() * 0.17).toFixed(2);
+  // Confidence comes from the model's evidence rubric; don't inflate a missing
+  // value into a high-looking score.
+  const conf = raw.confidence ? Math.min(+raw.confidence, 0.97) : 0.5;
   const mentionSpike = Math.round(500 + Math.random() * 2500);
   const darkPool = +(15 + Math.random() * 20).toFixed(1);
 
@@ -461,11 +462,29 @@ function DetailPanel({ signal }) {
         <div style={{ fontSize: 8, color: T.amber, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 3, fontFamily: "var(--mono)" }}>
           Catalyst
         </div>
-        <div style={{ fontSize: 11, color: T.textBright, lineHeight: 1.5 }}>{signal.catalyst}</div>
+        <div style={{ fontSize: 11, color: T.textBright, lineHeight: 1.5 }}>
+          {signal.catalyst}
+          {signal.catalyst_confirmed === false && (
+            <span style={{ color: T.amber, fontSize: 9, marginLeft: 6 }}>· company PR only, unconfirmed</span>
+          )}
+        </div>
         {signal.source && (
           <div style={{ fontSize: 9, color: T.textDim, marginTop: 3 }}>Source: {signal.source}</div>
         )}
       </div>
+
+      {/* Bear case */}
+      {signal.bear_case && (
+        <div style={{
+          padding: "8px 12px", borderRadius: 6,
+          background: T.redDim, border: `1px solid rgba(255,68,102,0.14)`,
+        }}>
+          <div style={{ fontSize: 8, color: T.red, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 3, fontFamily: "var(--mono)" }}>
+            Bear Case
+          </div>
+          <div style={{ fontSize: 11, color: T.textBright, lineHeight: 1.5 }}>{signal.bear_case}</div>
+        </div>
+      )}
 
       {/* Chart */}
       <div>
@@ -627,11 +646,17 @@ export default function App() {
           "Content-Type": "application/json",
           "x-api-key": effectiveKey,
           "anthropic-version": "2023-06-01",
+          "anthropic-beta": "server-side-fallback-2026-07-01",
           "anthropic-dangerous-direct-browser-access": "true",
         },
         body: JSON.stringify({
           model: MODEL,
-          max_tokens: 4000,
+          // Thinking is always on for claude-mythos-5 and max_tokens caps
+          // thinking + response text together, so give it headroom.
+          max_tokens: 16000,
+          // Server-side fallback: if safety classifiers decline the request,
+          // the API re-runs it on Anthropic's recommended fallback model.
+          fallbacks: "default",
           tools: [{ type: "web_search_20250305", name: "web_search" }],
           messages: [{ role: "user", content: SCAN_PROMPT }],
         }),
@@ -643,6 +668,16 @@ export default function App() {
       }
 
       const data = await resp.json();
+
+      // claude-mythos-5 can return HTTP 200 with stop_reason "refusal"
+      // (safety classifiers declined; content is empty or partial). Check
+      // before reading content. With fallbacks enabled this only fires if
+      // the fallback model refused too.
+      if (data.stop_reason === "refusal") {
+        const category = data.stop_details?.category || "unspecified";
+        throw new Error(`Request declined by safety classifiers (category: ${category})`);
+      }
+
       log("Web search completed, parsing results...", T.cyan, "◎");
 
       const textBlocks = (data.content || [])
@@ -661,11 +696,22 @@ export default function App() {
       for (const strat of strategies) {
         try {
           const result = strat();
-          if (Array.isArray(result) && result.length > 0 && result[0].ticker) {
+          // An empty array is a valid outcome: nothing survived disqualification.
+          if (Array.isArray(result) && (result.length === 0 || result[0].ticker)) {
             parsed = result;
             break;
           }
         } catch { /* try next strategy */ }
+      }
+
+      if (parsed && parsed.length === 0) {
+        setDataSource("live");
+        log("No trade today — no candidate survived the disqualification round", T.amber, "◇");
+        clearInterval(timerRef.current);
+        setElapsed(+((Date.now() - start) / 1000).toFixed(1));
+        setPhase("complete");
+        setScanning(false);
+        return;
       }
 
       if (parsed) {
