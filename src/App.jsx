@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // ─── CONSTANTS ─────────────────────────────────────────────────────────────────
 const API_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-fable-5";
 
 const SCAN_PROMPT = `You are a micro-cap stock screening engine. Your job is to identify real US micro-cap stocks showing unusual momentum TODAY.
 
@@ -627,12 +627,14 @@ export default function App() {
           "Content-Type": "application/json",
           "x-api-key": effectiveKey,
           "anthropic-version": "2023-06-01",
+          "anthropic-beta": "server-side-fallback-2026-07-01",
           "anthropic-dangerous-direct-browser-access": "true",
         },
         body: JSON.stringify({
           model: MODEL,
-          max_tokens: 4000,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          max_tokens: 16000,
+          fallbacks: "default",
+          tools: [{ type: "web_search_20260209", name: "web_search" }],
           messages: [{ role: "user", content: SCAN_PROMPT }],
         }),
       });
@@ -643,6 +645,11 @@ export default function App() {
       }
 
       const data = await resp.json();
+      if (data.stop_reason === "refusal") {
+        // Safety classifiers declined the request (even after any server-side
+        // fallback); content is empty or partial — don't try to parse it.
+        throw new Error(`Request refused (${data.stop_details?.category || "unspecified"})`);
+      }
       log("Web search completed, parsing results...", T.cyan, "◎");
 
       const textBlocks = (data.content || [])
