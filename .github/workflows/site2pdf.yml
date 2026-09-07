@@ -1,0 +1,109 @@
+name: site2pdf
+
+# Captures a web page as PDF on a GitHub-hosted runner (which has open
+# internet access) and commits the results under out/ on the same branch.
+#
+# Runs automatically when this workflow file is pushed to the capture branch,
+# or on demand via workflow_dispatch with a custom URL / output name.
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Page URL to capture
+        required: true
+        default: "https://maakav.org.il/2026/01/28/%D7%AA%D7%91%D7%99%D7%A2%D7%AA-%D7%9B%D7%AA%D7%91-%D7%9B%D7%90%D7%9F-11-%D7%A4%D7%95%D7%AA%D7%97%D7%AA-%D7%97%D7%A9%D7%91%D7%95%D7%9F-%D7%A6%D7%99%D7%91%D7%95%D7%A8%D7%99-%D7%A9%D7%9C%D7%90-%D7%A0/"
+      name:
+        description: Output basename (files are written to out/<name>.*)
+        required: true
+        default: maakav-kan11
+  push:
+    branches:
+      - claude/create-website-pdf-c49se4
+    paths:
+      - .github/workflows/site2pdf.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: site2pdf-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      URL: ${{ inputs.url || 'https://maakav.org.il/2026/01/28/%D7%AA%D7%91%D7%99%D7%A2%D7%AA-%D7%9B%D7%AA%D7%91-%D7%9B%D7%90%D7%9F-11-%D7%A4%D7%95%D7%AA%D7%97%D7%AA-%D7%97%D7%A9%D7%91%D7%95%D7%9F-%D7%A6%D7%99%D7%91%D7%95%D7%A8%D7%99-%D7%A9%D7%9C%D7%90-%D7%A0/' }}
+      NAME: ${{ inputs.name || 'maakav-kan11' }}
+      CHROME_BIN: google-chrome
+      CHROME_UA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Hebrew fonts and poppler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            fonts-noto-core fonts-dejavu-core poppler-utils
+          fc-cache -f >/dev/null
+          echo "Hebrew-capable fonts:"; fc-list :lang=he family | sort -u | sed -n '1,12p'
+          echo "Chrome:"; google-chrome --version
+
+      - name: Save raw HTML
+        id: raw
+        continue-on-error: true
+        run: |
+          mkdir -p out
+          code=$(curl -sSL --compressed -A "$CHROME_UA" \
+            -H "Accept-Language: he-IL,he;q=0.9,en;q=0.8" \
+            -o "out/$NAME.html" -w "%{http_code}" "$URL")
+          echo "HTTP $code  bytes=$(wc -c < "out/$NAME.html")"
+          head -c 600 "out/$NAME.html"; echo
+          if [ "$code" != "200" ]; then
+            echo "fetch failed; discarding the response body"
+            rm -f "out/$NAME.html"
+            exit 1
+          fi
+
+      - name: Render PDFs from the live page
+        id: live
+        continue-on-error: true
+        run: python3 tools/site2pdf.py "$URL" "out/$NAME"
+
+      - name: Fallback - render from the saved HTML
+        if: steps.live.outcome == 'failure' && steps.raw.outcome == 'success'
+        run: python3 tools/site2pdf.py --html "out/$NAME.html" "out/$NAME" "$URL"
+
+      - name: Inspect output and build previews
+        run: |
+          set -x
+          pdfinfo "out/$NAME.pdf" | grep -E "Pages|Page size"
+          pdfinfo "out/$NAME.reader.pdf" | grep -E "Pages|Page size"
+          pdftoppm -png -r 45 -f 1 -l 2 "out/$NAME.pdf" "out/$NAME.preview"
+          pdftoppm -png -r 45 -f 1 -l 2 "out/$NAME.reader.pdf" "out/$NAME.reader.preview"
+          set +x
+          echo "----- reader text (first 60 lines) -----"
+          pdftotext -l 2 "out/$NAME.reader.pdf" - | sed -n '1,60p'
+          echo "----------------------------------------"
+          ls -la out
+
+      - name: Commit results to the branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f out
+          if git diff --cached --quiet; then
+            echo "nothing new to commit"
+            exit 0
+          fi
+          git commit -m "Capture $NAME as PDF via site2pdf on Actions"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}
+          path: out
+          if-no-files-found: error

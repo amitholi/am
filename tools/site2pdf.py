@@ -28,7 +28,12 @@ CHROME_FLAGS = [
     "--force-color-profile=srgb",
     "--virtual-time-budget=20000",
     "--run-all-compositor-stages-before-draw",
+    "--lang=he-IL",
 ]
+# Headless Chrome announces itself as "HeadlessChrome" in its user agent, which
+# some sites refuse. CHROME_UA lets the caller present a normal browser string.
+if os.environ.get("CHROME_UA"):
+    CHROME_FLAGS.append("--user-agent=%s" % os.environ["CHROME_UA"])
 
 # Marker prefix used to remember that a text line came from a heading tag.
 H_MARK = "@@H@@"
@@ -44,7 +49,7 @@ HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 
 def run_chrome(*args):
     proc = subprocess.run([CHROME, *CHROME_FLAGS, *args],
-                          capture_output=True, text=True, timeout=180)
+                          capture_output=True, text=True, timeout=90)
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr[-4000:] + "\n")
         raise SystemExit("chromium exited %d" % proc.returncode)
@@ -101,7 +106,7 @@ class ArticleExtractor(HTMLParser):
                 self.meta_date = a.get("content")
         if tag == "title":
             self._in_title_tag = True
-        if tag == "h1" and self.h1 is None:
+        if tag == "h1" and self.h1 is None and self.drop_depth == 0:
             self._h1_parts = []
         if tag == "time" and not self.meta_date and a.get("datetime"):
             self.meta_date = a.get("datetime")
@@ -132,7 +137,8 @@ class ArticleExtractor(HTMLParser):
         if tag == "title":
             self._in_title_tag = False
         if tag == "h1" and self._h1_parts is not None:
-            self.h1 = re.sub(r"\s+", " ", "".join(self._h1_parts)).replace(H_MARK, "").strip()
+            txt = re.sub(r"\s+", " ", "".join(self._h1_parts)).replace(H_MARK, "").strip()
+            self.h1 = txt or None
             self._h1_parts = None
         for i in range(len(self.stack) - 1, -1, -1):
             if self.stack[i][0] == tag:
@@ -233,6 +239,20 @@ def build_reader_html(url, title, date, body):
 </body></html>""" % (esc(title), esc(title), date_row, esc(url), "\n".join(blocks))
 
 
+def page_failure_reason(dom, ex, body):
+    """Return why the loaded DOM is not the article, or None if it looks fine."""
+    if 'id="main-frame-error"' in dom or 'class="neterror"' in dom:
+        return "chrome network error page"
+    title = (ex.title or "").lower()
+    if "just a moment" in title or "challenge-platform" in dom or "cf-chl" in dom:
+        return "bot challenge page"
+    if "access denied" in title or "403 forbidden" in title:
+        return "access denied"
+    if not body.strip():
+        return "no article text found"
+    return None
+
+
 def print_pdf(target, out_pdf):
     run_chrome("--print-to-pdf=%s" % out_pdf, "--no-pdf-header-footer", target)
     if not os.path.exists(out_pdf) or os.path.getsize(out_pdf) < 1000:
@@ -256,18 +276,26 @@ def main():
     out = os.path.abspath(out)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
 
-    print("[1/3] rendering live page -> %s.pdf" % out)
-    print_pdf(target, out + ".pdf")
-
-    print("[2/3] extracting article text")
+    # Extract first: Chrome exits 0 and happily prints its own error page when
+    # the site cannot be reached or refuses us, so the DOM is the only reliable
+    # signal that we actually got the article.
+    print("[1/3] loading page and extracting article text")
+    dom = dump_dom(target)
     ex = ArticleExtractor()
-    ex.feed(dump_dom(target))
+    ex.feed(dom)
     body = ex.best_text()
+    reason = page_failure_reason(dom, ex, body)
+    if reason:
+        raise SystemExit("page did not load as an article (%s): %s" % (reason, target))
+
     title = (ex.meta_title or ex.h1 or ex.title or "").strip()
     if not title and url.startswith("http"):
         slug = unquote(urlparse(url).path.rstrip("/").split("/")[-1])
         title = slug.replace("-", " ")
     date = (ex.meta_date or "").strip()
+
+    print("[2/3] rendering live page -> %s.pdf" % out)
+    print_pdf(target, out + ".pdf")
 
     with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False,
                                      encoding="utf-8") as fh:
